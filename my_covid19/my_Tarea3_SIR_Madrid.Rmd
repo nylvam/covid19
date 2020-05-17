@@ -1,0 +1,158 @@
+---
+title: "my_Tarea3_SIR_Madrid"
+author: "Nylvam"
+date: "5/1/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+```
+
+# Estudio SIR Comunidad de Madrid
+
+PENDIENTE: QUE HACEMOS CON VALORES hospitalizados y UCI, están incluidos en casos?
+
+## Paso 1
+Cargar los datos del número de infectados, fallecidos, hospitalizados, enfermos en las UCI y recuperados de las comunidades autónomas.
+
+Llamarle datos a la variable de R donde habéis almacenado la información.
+
+Usando la función select del paquete tidyverse seleccionar las variables que nos da la fecha, la comunidad autónoma, la variable total y tipo de ka variable datos.
+```{r}
+# Cargamos tabla de datos por CCAA
+datos = read.csv("DatosCCAA.csv")
+str(datos)
+
+# Necesario para convertir la fecha en tipo 'Date', dado que se importa como 'chr'
+datos$fecha = as.Date(datos$fecha)
+str(datos)
+
+# Seleccionamos solo las columnas 'fecha', 'CCAA', 'total' y 'tipo'
+datos <- datos %>%
+  select(fecha, CCAA, total, tipo)
+
+head(datos)
+```
+
+## Paso 2
+A partir de la variable filtrada de la pregunta anterior y usando la función filter, calcular tres tablas de datos:
+
+- casos.Madrid que tenga las columnas o variables fecha y número de infectados de la comunidad de Madrid.
+
+- fallecidos.Madrid que tenga las columnas o variables fecha y número de fallecidos de la comunidad de Madrid.
+
+- recuperados.Madrid que tenga las columnas o variables fecha y número de altas o recuperados de la comunidad de Madrid.
+
+Veréis que las variables número de infectados, fallecidos y recuperados de las tres tablas de datos anteriores no tienen la misma longitud.
+
+A partir de las tablas anteriores,  crear tres vectores más que nos den los infectados, fallecidos y recuperados de la comunidad de Madrid asegurándose que tienen la misma longitud añadiendo ceros al principio de los vectores que tengan longitud menor.
+```{r}
+# Extraemos diferentes tablas de datos para casos, fallecidos y altas
+casos.Madrid = datos%>% filter(CCAA == "Madrid")
+casos.Madrid = datos %>% 
+  filter(CCAA == "Madrid", tipo == "casos") %>%
+  group_by(fecha) %>%
+  summarise(total = sum(total))
+
+fallecidos.Madrid = datos %>% 
+  filter(CCAA == "Madrid", tipo == "fallecidos") %>%
+  group_by(fecha) %>%
+  summarise(total = sum(total))
+
+recuperados.Madrid = datos %>% 
+  filter(CCAA == "Madrid", tipo == "altas") %>%
+  group_by(fecha) %>%
+  summarise(total = sum(total))
+
+# Creamos tres vectores para infectados, fallecidos y recuperados
+# Añadir ceros al principio de los vectores que tengan longitud menor
+# Infectados es de mayor longitud, porque se produjeron antes de haber fallecidos o recuperados 
+infectados = casos.Madrid$total
+fallecidos = c(rep(0, length(casos.Madrid$fecha) - length(fallecidos.Madrid$total)), fallecidos.Madrid$total)
+recuperados = c(rep(0, length(casos.Madrid$fecha) - length(recuperados.Madrid$total)), recuperados.Madrid$total)
+```
+
+## Paso 3
+A partir de la población de la comunidad de Madrid, hallar la estimación del número básico de reproducción R0 y compararlo con el valor adecuado para estudiar si la epidemia se seguirá expandiendo o no.
+```{r}
+# Obtener la población de la Comunidad de Madrid
+datos_poblacion = read.csv("Fichero_poblaciónCCAA.csv")
+habitantes = datos_poblacion$Pob_CCAA_2019[datos_poblacion$CCAA == "MADRID"]
+
+# Preparamos los datos
+infectados2 = infectados + fallecidos
+susceptibles = habitantes - infectados2 - recuperados
+tabla_Madrid = data.frame(unique(casos.Madrid$fecha), susceptibles, infectados, recuperados)  
+names(tabla_Madrid) = c("Fecha", "Susceptibles", "Infectados", "Recuperados")
+head(tabla_Madrid)  
+
+# Calculamos R0 para los datos que tenemos
+x = tabla_Madrid$Recuperados
+y = habitantes * log(tabla_Madrid$Susceptibles)
+regresion = lm(y~x)
+summary(regresion)
+estimacion_R0 = -regresion$coefficients[2]
+estimacion_R0
+
+# Determinar si la epidemia se expandirá
+dia_ultimo = length(tabla_Madrid[,1])
+dia_ultimo
+formula = exp(estimacion_R0*tabla_Madrid$Recuperados[dia_ultimo]/habitantes)
+formula
+if (estimacion_R0 > formula) {
+  "Se expandirá"
+}  else {
+  "No se expandirá"
+}
+```
+
+## Paso 4
+Realizar el estudio de las tres preguntas anteriores para los datos de la Comunidad de Cataluña.
+```{r}
+# Extraemos diferentes tablas de datos para casos, fallecidos y altas
+casos.Cataluña = datos %>% 
+  filter(CCAA == "Cataluña", tipo == "casos") %>%
+  group_by(fecha) %>%
+  summarise(total = sum(total))
+fallecidos.Cataluña = datos %>% 
+  filter(CCAA == "Cataluña", tipo == "fallecidos") %>%
+  group_by(fecha) %>%
+  summarise(total = sum(total))
+recuperados.Cataluña = datos %>% 
+  filter(CCAA == "Cataluña", tipo == "altas") %>%
+  group_by(fecha) %>%
+  summarise(total = sum(total))
+# Creamos tres vectores para infectados, fallecidos y recuperados
+infectados = casos.Cataluña$total
+fallecidos = c(rep(0, length(casos.Cataluña$fecha) - length(fallecidos.Cataluña$total)), fallecidos.Cataluña$total)
+recuperados = c(rep(0, length(casos.Cataluña$fecha) - length(recuperados.Cataluña$total)), recuperados.Cataluña$total)
+# Obtener la población de Cataluña
+datos_poblacion = read.csv("Fichero_poblaciónCCAA.csv")
+habitantes = datos_poblacion$Pob_CCAA_2019[datos_poblacion$CCAA == "CATALUÑA"]
+# Preparamos los datos
+infectados2 = infectados + fallecidos
+susceptibles = habitantes - infectados2 - recuperados
+tabla_Cataluña = data.frame(unique(casos.Cataluña$fecha), susceptibles, infectados, recuperados)  
+names(tabla_Cataluña) = c("Fecha", "Susceptibles", "Infectados", "Recuperados")
+head(tabla_Cataluña)  
+# Calculamos R0 para los datos que tenemos
+x = tabla_Cataluña$Recuperados
+y = habitantes * log(tabla_Cataluña$Susceptibles)
+regresion = lm(y~x)
+summary(regresion)
+estimacion_R0 = -regresion$coefficients[2]
+estimacion_R0
+# Determinar si la epidemia se expandirá
+dia_ultimo = length(tabla_Cataluña[,1])
+dia_ultimo
+formula = exp(estimacion_R0*tabla_Cataluña$Recuperados[dia_ultimo]/habitantes)
+formula
+if (estimacion_R0 > formula) {
+  "Se expandirá"
+}  else {
+  "No se expandirá"
+}
+```
+

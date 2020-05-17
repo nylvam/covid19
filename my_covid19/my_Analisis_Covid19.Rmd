@@ -1,0 +1,668 @@
+---
+title: "Analisis COVID19"
+author: "Nylvam"
+date: "23/04/2020"
+output:
+  html_document: default
+  pdf_document: default
+editor_options:
+  chunk_output_type: inline
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(knitr)
+# Para no tener que establecer el engine cada vez en los chunks de python
+knitr::opts_chunk$set(engine.path = '/Users/ramonpuga/opt/anaconda3/bin/python')
+
+#library(kableExtra)
+library(tidyverse) # %>% el resultado de la izquierda se aplica a la derecha
+library(magrittr) # %<>% el rdo de la izda se aplica a la dcha y viceversa
+library(lubridate) # quizas no sea necesario importarla, ya viene incluida en tidyverse
+library(rnaturalearth)
+# Terminal: which python --> /Users/ramonpuga/opt/anaconda3/bin/python
+library(reticulate)
+library(plotly)
+library(xts)
+library(dygraphs)
+library(car)
+
+# Con esta linea funciona el chunk de python, para lanzar Knit, pero no lo ejecuta
+#knitr::opts_chunk$set(python.reticulate=FALSE)
+
+# Forzamos a que se use el python 3.7 alojado aquí
+use_python("/Users/ramonpuga/opt/anaconda3/bin/python")
+# Sys.setenv(RETICULATE_PYTHON = PATH) # Fijar desde una variable de entorno, en .RProfile del proyecto
+# Otro fichero a mirar es Renviron
+# otras opciones, pero con orden de preferencia tras use_python()
+#use_condaenv("myenv", required = TRUE) --> 'my environment'
+#use_condaenv(condaenv = "myenv", conda = "/Users/ramonpuga/opt/anaconda3/bin/conda", required = TRUE)
+# Interesante estas dos funciones
+# Sys.which('python') 
+#py_config() # Sin el use_python por defecto está cogiendo python2.7
+#py_discover_config()
+# Otras funciones relacionadas con el entorno de R
+#R.home() # dónde está instalado R --> R_HOME
+#path.expand("~") # path de salida --> HOME
+#getwd() # path del proyecto actual
+# Puede haber varios fichero 'R-Profile' pero en cada sesión solo se usará uno 
+# The preference order is: Current project>HOME>R_HOME
+```
+
+# Carga y limpieza preliminar de los datos
+
+Los datos que se van a analizar proceden de [Kaggle](https://www.kaggle.com/imdevskp/corona-virus-report) - Version 91 - 29 de abril de 2020
+
+# insertando un chunk de Python
+#```{python}
+#import pandas as pd
+#datos = pd.read_csv("covid_19_clean_complete.csv")
+#datos.head(10)
+#variable_chunk_python = 2
+#```
+
+## insertando un chunk de R y usando 'reticulate' que hace de conexion entre R y Python
+```{r}
+#pd <- import("pandas")
+#datos <- pd$read_csv("covid_19_clean_complete.csv")
+#kable(head(datos, 10))
+# Como llamar a una variable creada en un chunk de python
+# variable_chunk_r = variable_chunk_python * 3 #--> esto da error
+#variable_chunk_r = py$variable_chunk_python * 3 #--> esto es Ok, poniendo 'py$' antes de la variable 
+```
+
+## importando los datos nativamente en R
+```{r}
+datos <-read.csv("covid_19_clean_complete.csv", stringsAsFactors = FALSE)
+#kable(head(datos, 10))
+# utilizando la libreria 'tidyverse'
+datos %>% head(10) %>% kable()
+```
+
+## Estructura de los datos
+
+```{r}
+str(datos)
+colnames(datos) = c("Provincia_Estado", # Cualitativo
+                    "Pais_Region", # Cualitativo
+                    "Latitud", # Norte+ o Sur- Cuantitativo
+                    "Longitud", # Este+ u Oeste- Cuantitativo
+                    "Fecha", # Ordinal
+                    "Casos_Confirmados", # Cuantitativo
+                    "Casos_Muertos", # Cuantitativo
+                    "Casos_Recuperados" # Cuantitativo
+                    )
+datos %>% head() %>% kable() #%>% kable_styling()
+```
+
+* Cualitativas se convierten con 'factor' o bien 'as.factor'.
+* Ordinales se convierten con 'ordered'.
+* Cuantitativos se convierten con 'as.numeric' o 'as.integer'.
+
+Cuando se usa en read.csv hay un parámetros llamado 'stringsAsFactors' que por defecto es True, pero si lo ponemos a False, no convertirá las columnas string en factores, se quedaran como 'chr'. Por lo tanto luego sería necesario convertirlas con factor(), las fechas tambien se importan como 'chr'.
+
+```{r}
+# importado con stringsAsFactors = False
+#datos$Provincia_Estado = factor(datos$Provincia_Estado)
+#datos$Pais_Region = factor(datos$Pais_Region)
+# si importamos magrittr podemos usar %<>% y cambiar estas dos últimas instrucciones
+datos$Provincia_Estado %<>% factor() # Primero pasa el valor a la función (dcha) y luego se devulve convertido al propio valor (izda)
+datos$Pais_Region %<>% factor()
+# Al cargar los datos con stringsAsFactors = False, la fecha se importa como 'chr' y hay que convertirla indicando el formato 'm/d/y' en que vienen los datos en el fichero
+#datos$Fecha %<>% as.Date(format="%m/%d/&y")
+# Importamos la libreria 'lubridate' que sobreescribe cosas del paquete estandar, y entre ellas es el objeto date y ya no funciona 'as.Date'
+datos$Fecha %<>% mdy()
+str(datos)
+```
+
+
+$$Confirmados = Muertos + Recuperados + Enfermos $$
+
+```{r}
+# Añadimos una nueva columna calculada según la formula anterior, dado que no tenemos los Enfermos
+# Con la sintaxis %<>% los datos van a la dcha se añade la columna y vuelven a la izda
+datos %<>%
+  mutate(Casos_Enfermos = Casos_Confirmados - Casos_Muertos - Casos_Recuperados)
+datos %>% 
+  filter(Casos_Confirmados > 10000) %>% 
+  head(10) %>% 
+  kable()
+
+# Comprobar si hay errores en los datos y no concuerdan, salen Casos_Enfermos negativos
+datos %>%
+  filter(Casos_Enfermos < 0) %>%
+  arrange(Provincia_Estado, Fecha) %>% # Ordenamos por país y fecha
+  kable()
+
+# Chequear que pasa con los datos erroneos de la provincia 'Hainan'
+datos %>%
+  filter(Provincia_Estado == "Hainan") %>%
+  kable()
+
+# Hay un error entre una fechas, porque luego se corrige
+datos %>%
+  filter(Provincia_Estado == "Hainan", Casos_Enfermos < 0) %>%
+  mutate(Casos_Recuperados = Casos_Recuperados + Casos_Enfermos,
+         Casos_Enfermos = 0) %>%
+  kable()
+
+
+```
+
+# Análisis geográfico
+
+```{r}
+# Filtrado directo rectangulo aprox. de Europa
+#datos_europa = datos[datos$Latitud > 38 & datos$Longitud > -25 & datos$Longitud < 30 , ]
+#datos_europa <- datos[datos$Latitud > 38 & datos$Longitud > -25 & datos$Longitud < 30 , ]
+# Filtrao de otra manera con la función filter
+datos_europa = datos %>%
+  filter(Latitud > 38, between(Longitud, -25, 30))
+
+nrow(datos_europa)
+
+table(datos_europa$Pais_Region) %>% nrow()
+
+# ejecutando (Knit) aparecen 185 paises, muchos con frecuencia 0, y que no están en datos_europa ???
+frec_europa = as.data.frame(table(datos_europa$Pais_Region))
+frec_europa %>% kable()
+nrow(frec_europa)
+
+# table crea una tabla de frecuencias, con una columna llamada Freq
+table(datos_europa$Pais_Region) %>% kable()
+# los paises con frecuencia no nula serían los de Europa (???)
+# P: Porqué al hacer: table(datos_europa$Pais_Region) %>% kable()
+# aparecen países que no están en datos_europa, y es necesario aplicar un filter(Freq > 0) .
+# R: Porque la columna de país tiene TODOS los países ya que son factores, y se guardan incluso para indicar que hay cero observaciones
+# filter no deja sobre class(table), así que lo convertimos a data.frame
+table(datos_europa$Pais_Region) %>% 
+  as.data.frame() %>%
+  filter(Freq > 0) %>%
+  kable() 
+
+# Sacamos una foto de como estaba Europa el día de inicio del estado de alarma en España
+datos_europa %>%
+  filter(Fecha == ymd("2020-03-15")) %>%
+  kable()
+```
+
+$$ Distancia Euclidea: d(x, y) = \sqrt{(x_{Lat}-y_{Lat})^2+(x_{Long}-y_{Long})^2}$$
+```{r}
+# declaramos una función para calcula distancia euclidea entre dos puntos con coordenadas
+distancia_grados = function(x, y){
+  sqrt((x[1]-y[1])^2 + (x[2]-y[2])^2)
+}
+
+# funcion para la distancia en grados a Potsdam, con parametro x, del punto origen a calcular
+distancia_grados_potsdam = function(x){
+  potsdam = c(52.366856, 13.906734)
+  distancia_grados(x, potsdam)
+}
+
+dist_potsdam = apply(cbind(datos_europa$Latitud, datos_europa$Longitud),
+                     MARGIN = 1,
+                     FUN = distancia_grados_potsdam)
+
+datos_europa %<>%
+  mutate(Dist_Potsdam = dist_potsdam)
+
+# filtrar por las fechas del viaje, y un ciruclo alrededor de 4 grados
+datos_europa %>%
+  filter(between(Fecha, dmy("2-3-2020"), dmy("7-3-2020")),
+         dist_potsdam < 4) %>%
+  kable()
+```
+
+```{r}
+world <- ne_countries(scale = "medium", returnclass = "sf")
+
+# Como 'Pais_Region' es un factor, el renombrado (siguente instrucción) da error, no existe ese factor level
+# Añadimos el nivel de factor 'United States', los niveles serán la combinación de los niveles actuales
+# 'levels(datos$Pais_Region)' más el nuevo nivel 'United States'
+datos$Pais_Region = factor(datos$Pais_Region, levels = c(levels(datos$Pais_Region), "United States"))
+
+# EEUU no aparece porque en 'datos' es 'US' y 'world' es 'United States'
+datos[datos$Pais_Region=="US",]$Pais_Region = "United States"
+
+# Vamos a tratar de cruzar los datos de nuestra tabla, para pintar los paises
+# Hacemos un inner_join como en query, y la columna 'name' de 'world' contra 'Pais_Region' de 'datos'
+world %>%
+  inner_join(datos, by = c("name" = "Pais_Region")) %>%
+  filter(Fecha == dmy("15-03-2020")) %>%
+  ggplot() +
+  geom_sf(color = "black", aes(fill = Casos_Confirmados)) + 
+#  coord_sf(crs="+proj=laea +lat_0=50 +lon_0=10 +units=m +ellps=GRS80") + # Añadimos otra capa, una proyección para que el map no sea plano
+  scale_fill_viridis_c(option = "plasma", trans = "sqrt") +
+  xlab("Longitud") + ylab("Latitud") +
+  ggtitle("Mapa del mundo", subtitle = "COVID-19") -> g
+
+# Uso de plotly (como mejora deja hacer zoom)
+ggplotly(g)
+```
+
+```{r}
+datos %>%
+  filter(Fecha == dmy("30-03-2020")) %>% 
+  ggplot(aes(Longitud, Latitud)) + # Hacemos una representacion con la estética (aes), de long, latit y representado con un punto geom_point()
+  geom_point(aes(size = log(Casos_Confirmados+1), colour = Casos_Muertos )) + # En lugar de ver un simple punto que el punto sea proporcional y con una representacion en color según el nº de muertos
+  # Podemos aplicar el log también al color: colour = log(Casos_Muertos+1)))
+  coord_fixed() +
+  theme(legend.position = "bottom") -> g
+# Aplicamos en escala logaritmica a modo de ejemplo, para hacerlo proporcional, sumamos 1 para que no se ejecute log 0
+# Usamos plotly
+ggplotly(g)
+```
+
+```{r}
+
+# Umbral (threshold)
+thr = 1000
+
+datos %>%
+  filter(Fecha == dmy("05-04-2020"), 
+         Casos_Confirmados > thr) %>%
+  mutate(Prop_Muertos = (Casos_Muertos / Casos_Confirmados) * 100, # Nueva columna de propoción de muertos 
+         Ranking = dense_rank(desc(Prop_Muertos))) %>% # Añadimos un ranking en desc
+  arrange(Ranking) %>% # Ordenamos la tabla por el ranking
+  head(20) %>% # Mostramos solo los X primeros
+  kable()
+```
+
+```{r}
+# Añadimos dos columnas
+# Cortamos estos datos continuos (lat y long) en trozos o grupos con 'breaks'
+# Para calcular el numero de divisiones, en este caso usalos la regla de Scott y Sturges para probar, luego lo cambiamos
+datos$lat_class = cut(datos$Latitud, 
+                      breaks =seq(from = -90, to = 90, by = 10))
+                      #breaks = nclass.scott(datos$Latitud))
+datos$long_class = cut(datos$Longitud,
+                      breaks = seq(from = -180, to = 180, by = 10)) 
+                      #breaks = nclass.Sturges(datos$Longitud))
+tt = table(datos$lat_class, datos$long_class)
+# Damos la vuelta a la tabla, porque el sur (lat y long negativas) aparecen arriba y el norte abajo
+tt = tt[nrow(tt):1, ]
+# Creamos un diagrama de mosaico, transponemos (t) el gráfico porque hay mas detalle en columnas que filas
+# El gráfico esta mostrando los paises
+mosaicplot(t(tt), shade = TRUE)
+```
+
+
+## Análisis de datos temporal
+
+```{r}
+# Análisis descriptivo de como han evolucionado los datos a lo largo del tiempo
+# Agregamos datos en función de la fecha
+# Agrega tres columnas (cbin), en función de la fecha, con el dataset (data), la función (FUN)
+datos_por_fecha = aggregate(
+  cbind(Casos_Confirmados, Casos_Muertos, Casos_Recuperados) ~ Fecha,
+  data = datos,
+  FUN = sum
+)
+datos_por_fecha$Casos_Enfermos = datos_por_fecha$Casos_Confirmados - 
+  datos_por_fecha$Casos_Muertos - datos_por_fecha$Casos_Recuperados
+head(datos_por_fecha)
+tail(datos_por_fecha)
+
+# Gráfico tipo barplot de los Casos_Confirmados en función de la Fecha
+barplot(Casos_Confirmados ~ Fecha, data = datos_por_fecha)
+
+plot(Casos_Confirmados ~ Fecha, data = datos_por_fecha, col = "blue", type = "l", main = "Casos_documentados por día en todo el mundo", xlab = "Fecha", ylab ="Número de personas", log = "y")
+lines(Casos_Muertos ~ Fecha, data = datos_por_fecha, col = "red")
+lines(Casos_Recuperados ~ Fecha, data = datos_por_fecha, col = "green")
+
+legend("topleft", c("Confirmados", "Muertos", "Recuperados"),
+       col = c("blue", "red", "green"), pch = 1, lw = 2)
+
+# Utilizando la librería 'xts'
+# Crea un objeto xts, que el nombre de la fila es la Fecha y los valores: Casos_Confirmados, Muertos, Recuperados y Enfermos
+datos_por_fecha_ts <- xts(x = datos_por_fecha[ ,2:5],
+                          order.by = datos_por_fecha$Fecha)
+# Con la libreria dygraphs asociada a xts pintamos un diagrama, con diferentes opciones
+dygraph(datos_por_fecha_ts) %>%
+  dyOptions(labelsUTC = TRUE, labelsKMB = TRUE,
+            fillGraph = TRUE, fillAlpha = 0.05, 
+            drawGrid = FALSE, colors = "red") %>%
+  dyRangeSelector() %>%
+  dyCrosshair(direction = "vertical") %>%
+  dyHighlight(highlightCircleSize = 5, highlightSeriesBackgroundAlpha = 0.2,
+              hideOnMouseOut = FALSE) %>%
+  dyRoller(rollPeriod = 2)
+```
+
+## Análisis datos España
+```{r}
+# Filtramos Spain, pero además seleccionamos (select) las columnas que aportan algo
+# En este caso, la columna Fecha, y aquellas que empiezan por "Casos_"
+# La instrucción 'select' también condiciona el orden de las columnas
+datos_spain = datos %>% 
+  filter(Pais_Region == "Spain") %>%
+  select(Fecha, starts_with("Casos_"))
+
+plot(x = datos_spain$Fecha, y = datos_spain$Casos_Confirmados, main = "Casos Confirmados en España", type = "s", col = "blue", lwd = 2) # lwd = line width (ancho de la línea), type ="s" --> tipo escalón
+
+# Utilizando la librería 'xts'
+# Crea un objeto xts, que el nombre de la fila es la Fecha y los valores: Casos_Confirmados, Muertos, Recuperados y Enfermos
+datos_spain_ts <- xts(x = datos_spain[ ,2:5],
+                          order.by = datos_por_fecha$Fecha)
+# Con la libreria dygraphs asociada a xts pintamos un diagrama, con diferentes opciones
+dygraph(datos_spain_ts) %>%
+  dyOptions(labelsUTC = TRUE, labelsKMB = TRUE,
+            fillGraph = TRUE, fillAlpha = 0.05, 
+            drawGrid = FALSE, colors = "red") %>%
+  dyRangeSelector() %>%
+  dyCrosshair(direction = "vertical") %>%
+  dyHighlight(highlightCircleSize = 5, highlightSeriesBackgroundAlpha = 0.2,
+              hideOnMouseOut = FALSE) %>%
+  dyRoller(rollPeriod = 2)
+
+# Gráfico barplot, tenemos que transponer (t), de la columna 3 a la 5
+barplot(as.matrix(t(datos_spain[ ,3:5])),
+        names = datos_spain$Fecha, 
+        col = c("red", "green", "yellow"),
+        main = "Estudio de casos por tipo en España",
+        xlab = "Fecha", ylab = "Número de personas")
+legend("topleft", c("Muertos", "Recuperados", "Enfermos"),
+       col = c("red", "green", "yellow"), lw = 2, pch = 1
+       )
+
+```
+
+```{r}
+# lag retrasa los datos, según n, en este caso retrasamos un día
+# lead adelanta los datos, según n, en este caso adelantamos un día
+# Es decir obtenemos el número de Casos diario, entre el acumulado de un día y el acumulado del día anterior
+datos_spain %<>% 
+  mutate(Nuevos_Casos_Confirmados = Casos_Confirmados - lag(Casos_Confirmados, n = 1), 
+         Nuevos_Casos_Muertos = Casos_Muertos - lag(Casos_Muertos, n = 1),
+         Nuevos_Casos_Recuperados = Casos_Recuperados - lag(Casos_Recuperados, n = 1)
+         )
+
+datos_spain %>% tail(20)
+
+# Gráfico
+#plot(datos_spain$Fecha, datos_spain$Nuevos_Casos_Confirmados, type = "l", col = "blue", xlab = "Fecha", y_lab = "Nuevos casos", main = "Nuevos registros en España")
+#lines(datos_spain$Nuevos_Casos_Muertos, type = "l", col = "red")
+#lines(datos_spain$Nuevos_Casos_Recuperados, type = "l", col = "green")
+
+# Otra forma de definirlo
+#plot(Nuevos_Casos_Confirmados ~ Fecha, data = datos_spain,
+#     type = "l", col = "blue", 
+#     xlab = "Fecha", ylab = "Nuevos casos", 
+#     main = "Nuevos registros en España")
+#lines(Nuevos_Casos_Muertos ~ Fecha, data = datos_spain, type = "l", col = "red")
+#lines(Nuevos_Casos_Recuperados ~ Fecha, data = datos_spain, type = "l", col = "green")
+
+# La linéa de Recuperados se sala por arriba de la gráfica con los últimos datos
+# El 26/04/2020 hay 22.109 Nuevos_Casos_Recuperados
+# Por lo tanto ponemos esa primera columna, como plot para que dimensione el gráfico
+plot(Nuevos_Casos_Recuperados ~ Fecha, data = datos_spain,
+     type = "l", col = "green", 
+     xlab = "Fecha", ylab = "Nuevos casos", 
+     main = "Nuevos registros en España")
+lines(Nuevos_Casos_Muertos ~ Fecha, data = datos_spain, type = "l", col = "red")
+lines(Nuevos_Casos_Confirmados ~ Fecha, data = datos_spain, type = "l", col = "blue")
+
+legend("topleft", c("Confirmados", "Muertos", "Recuperados"),
+       col = c("blue", "red", "green"), 
+       lwd = 2, pch = 1)
+
+
+```
+
+## Análisis por Cohortes
+El análisis de cohortes es el análisis de comportamiento de un segmento determinado de usuarios que comparten una característica en común en un periodo de tiempo. Cohorte = es el segmento, la división 
+
+```{r}
+# Para poder comparar países, escalamos a la fecha del primer contagio de cada páis
+# El día 0 sería justo el dia anterior -1
+# Filtramos todos los registros que tengan 0 Casos_Confirmados
+# group_by no agrupa sino hacemos summarise, para decirle que columna usar para totalizar
+# Obtenemos una tabla con la lista de países y la fecha de primer contagio - 1, para cada país
+primer_contagio = datos %>%
+  group_by(Pais_Region) %>%
+  filter(Casos_Confirmados > 0) %>%
+  summarise(Primer_Contagio = min(Fecha)-1)
+
+
+# Creamos una tabla, cruzando la de datos con la tabla de primer_contagio
+# En el by ponemos una o varias columnas con 'c', si se llamasen distinto habría que poner el simbolo igual, con el nombre de cada columna
+# Como resultado tendremos la tabla de datos, con una última columna con 'Primer_Contagio'
+# Añadimos otra columna, con los dias desde el primer contagio, restando fechas
+# La resta de fechas da un objeto time, mejor convertirlo a entero, para facilitar los gráficos
+# Como no todos los páises tienen el detalle de Provincia_Estado, los podemos agrupar, para hacer el análisis por Pais_Region, la métrica será que ahora los Casos_xx serán igual a la suma de los casos de lo que se está agrupando
+data_first = datos %>%
+  inner_join(primer_contagio, by = "Pais_Region") %>%
+  mutate(Dias_Desde_PC = as.numeric(Fecha - Primer_Contagio)) %>%
+  filter(Dias_Desde_PC >= 0) %>%
+  group_by(Dias_Desde_PC, Pais_Region) %>%
+  summarise(Casos_Confirmados = sum(Casos_Confirmados),
+            Casos_Muertos = sum(Casos_Muertos),
+            Casos_Recuperados = sum(Casos_Recuperados),
+            Casos_Enfermos = sum(Casos_Enfermos)
+            )
+
+# Creamos el gráfico con ggplot y creando estéticas de dibujo
+# Son muchos datos todos los países, así que podemos elegir una lista
+# En el estudio geográfico se cambio US por United States, sino no sale Estados Unidos
+data_first %>%
+  filter(Pais_Region %in% c("Spain", "Italy", "China", "United States", "Germany")) %>% # US ó United States
+  ggplot(aes(x = Dias_Desde_PC, y = Casos_Confirmados)) + 
+  geom_line(aes(col = Pais_Region)) +
+  xlab("Días desde el primer contagio") +
+  ylab("Número de personas contagiadas") +
+  ggtitle("Análisis de Cohortes") +
+  theme(legend.position = "none") -> g # Quitamos la leyenda porque tendría todos los países, sino filtramos
+
+# Lo metemos en una variable 'g', para poder usarlo con ggploty y que sea interactivo
+ggplotly(g)
+        
+```
+
+
+# Modelos de regresión
+
+* $x$: Variable Independiente: número de días desde el origen de la pandemia.
+* $y$: Variabla Dependiente: número de casos confirmados.
+
+$$y = f(x)$$
+
+```{r}
+# Origen de la declaración de la pandemia "22/02/2020"
+# Añadimos una columna que será la variable independiente 'x' con el número de días 
+datos_spain$Dias = as.numeric(datos_spain$Fecha - dmy("22/01/2020"))
+```
+
+### Regresión Lineal
+
+$$y = ax+b, a,b\in \mathbb R$$
+
+$$min_{a,b\in\mathbb R} \sum_{i=1}^n (y_i-(ax_i+b))^2$$
+
+```{r}
+# Linear Model, la formula intentará predecir:
+# El número de 'Casos_Confirmados' en función '~' de los 'Dias' desde el origen de la pandemia para el dataset 'datos_spain'
+mod1 <- lm(Casos_Confirmados ~ Dias, data = datos_spain)
+summary(mod1)
+```
+
+La llamada a r para que saque los valores de las variables, solo se ve al ejecutar el markdown
+$$Casos\ Confirmados = `r mod1$coefficients[2]` Dias + `r mod1$coefficients[1]`$$
+$$y = b_1 * Dias + b_0$$
+
+```{r}
+# Pintamos un gráfico con los datos de x e y
+plot(datos_spain$Dias, datos_spain$Casos_Confirmados)
+# Añadimos la recta de regresión
+abline(mod1, col = "red")
+
+# Pintamos distribucion de los errores ajustados al modelo
+plot(mod1$residuals ~ mod1$fitted.values, xlab = "Valores Ajustados (predicción)", ylab = "Residuos del modelo (errores)")
+# Este gráfico muestra que el modelo (regresion lienal) no es bueno
+# No es Homocedastico
+
+# Pasamos un test (hay diferentes)
+# En la libreía 'car' hay una función qqPlot
+residuos = mod1$residuals
+
+# Sobre los residuos, siguen o no una distribución normal, con la media de los residuos, y una desviación standard de los propios residuos: residuos ~ (u, d2)
+qqPlot(residuos, distribution = "norm", mean = mean(residuos), sd = sd(residuos))
+# Obtendremos una distribución de los errores, el intervalo de confianza, donde mucho datos se salen, se acumulan al inicio, y en la zona media
+# Los cuantiles son puntos tomados a intervalos regulares de la función de distribución de una variable aleatoria
+# Los cuartiles, que dividen a la distribución en cuatro partes (corresponden a los cuantiles 0,25; 0,50 y 0,75)
+# Los quintiles, que dividen a la distribución en cinco partes (corresponden a los cuantiles 0,20; 0,40; 0,60 y 0,80);
+# Los deciles, que dividen a la distribución en diez partes;
+# Los percentiles, que dividen a la distribución en cien partes.
+
+```
+
+### Regresión exponencial
+Intentar aproximar no con una recta, sino con el logaritmo de la variable dependiente se pueda aproximar con una recta
+$$log(y) = ax+b, a,b \in \mathbb R$$
+si depejamos 'y' queda:
+$$y = e^{ax+b} = m e^{ax}$$
+Yo: para aclarar lo de m y el uso de exp(b)
+$$y = e^{ax+b} = e^b \cdot e^{ax} = m e^{ax}$$
+
+```{r}
+# Creamos el segundo modelo, tenemos cuidado de no incluir 0, dado que log(0) no existe
+# Cogemos solo las filas con datos > 0 y todas las columnas
+# El número de 'log(Casos_Confirmados)' en función '~' de los 'Dias' desde el origen de la pandemia para el dataset 'datos_spain'
+mod2 <- lm(log(Casos_Confirmados) ~ Dias, 
+           data = datos_spain[datos_spain$Casos_Confirmados > 0, ])
+summary(mod2)
+# R2 es muy alto 0,91 (entre 0 y 1), su significatividad es muy alta
+# Multiple R squared is simply a measure of Rsquared for models that have multiple predictor variables
+
+```
+
+$$Casos\ Confirmados = `r exp(mod2$coefficients[1])` \cdot e^{`r mod2$coefficients[2]` \cdot x}$$
+
+```{r}
+plot(datos_spain$Dias, datos_spain$Casos_Confirmados)
+# Exponencial de b * Exponencial de (a * x)
+lines(exp(mod2$coefficients[1])*exp(mod2$coefficients[2]*datos_spain$Dias), col = "blue")
+
+# Análisis de los residuos
+plot(mod2$residuals ~ mod2$fitted.values, xlab = "Valores Ajustados (predicción)", ylab = "Residuos del modelo (errores)")
+residuos = mod2$residuals
+qqPlot(residuos, distribution = "norm", mean = mean(residuos), sd = sd(residuos))
+
+
+```
+
+### Modelo Potencial
+Entre medias del lineal y el exponencial
+Se suele usar por si nos hemos pasado de frenada con el exponencial
+Parecido al exponencial, pero intentamos aproximar el log(y) en función del log(x)
+$$log(y) = a\cdot log(x)+b, a,b,\in\mathbb R$$
+Un número multiplicando un log es igual al log elevado al número que multiplica
+La exponencial del logaritmo se tachan, son funciones inversas
+Quedaria una constante 'm' por x^a
+$$y = e^{a\cdot log(x)+b} = e^b\cdot e^{log(x)^a} = m\cdot x^a $$
+
+```{r}
+# El número de 'log(Casos_Confirmados)' en función '~' del 'log(Dias)' desde el origen de la pandemia para el dataset 'datos_spain'
+# log(Dias) no nos preocupa, porque solo hay un día 0 y al filtrar por Casos_Confirmados > 0, no nos afecta porque el dia 0 no hay todavía Casos
+mod3 <- lm(log(Casos_Confirmados) ~ log(Dias), 
+           data = datos_spain[datos_spain$Casos_Confirmados > 0, ])
+summary(mod3)
+# R2 = 0,89
+```
+
+$$Casos\ Confirmados = `r exp(mod3$coefficients[1])` \cdot Dias^{`r mod2$coefficients[2]`}$$
+
+```{r}
+plot(datos_spain$Dias, datos_spain$Casos_Confirmados)
+lines(exp(mod3$coefficients[1])*datos_spain$Dias^mod3$coefficients[2], col = "green")
+
+plot(mod3$residuals ~ mod3$fitted.values,
+     xlab = "Valores Ajustados", ylab="Residuos del modelo")
+residuos = mod3$residuals
+qqPlot(residuos, distribution = "norm", mean = mean(residuos), sd = sd(residuos))
+
+```
+
+```{r}
+# CONCLUSION:
+# Ninguno de los tres modelos es el bueno
+# El modelo lineal es demasiado simple, la exponencial demasiado estricta crece demasiado rápido, y el potencial parece más calmada pero crece tarde
+# Podríamos crear nuestro propio modelo, usando la función lm para aplicar algún tipo de transformación
+# De los tres modelos, el mejor es el exponencial
+# El log(Casos_Confirmados) ~ Dias da un resultado muy bueno, lo aceptamos, pero en lugar de Dias podriamos intentar añadir Dias + log(Dias), la parte del modelo exponencial + la parte del potencial 
+# Añadimos más variables independientes y lo podemos complicar más con Dias^2
+# La I indica que es una variable del modelo I de variable independiente y añadir más variables al modelo, hasta complicar el modelo todo lo que queramos
+# Es la misma variable con transformaciones no lienales
+mi_model <- lm(log(Casos_Confirmados) ~ Dias + log(Dias) + I(Dias^2) + I(Dias^3) + sqrt(Dias),
+               data = datos_spain[datos_spain$Casos_Confirmados > 0, ])
+summary(mi_model)
+# R2 = 0,92
+# Añadiendo la I -> R2 = 0,98
+# Con todas las variables -> R2 = 0,99
+```
+
+```{r}
+# Comparar los modelos
+# Recordad que en datos_spain, añadimos la columna Dias, con la diferencia entre la Fecha y el día de inicio de la pandemia "22/01/2020"
+
+# Establecemos fecha de inicio y fin
+start_date = ymd("2020-01-22")
+end_date = ymd("2020-04-30")
+
+# Generamos un vector con el número de día desde la fecha inicio hasta la fecha fin
+# Las fechas a considerar serían las desde la de inicio hasta la final en saltos de 1 día
+# Sumamos 1 al inicio para que no haya el 0, por lo de los log(0)
+dates = seq(start_date + 1, end_date, by = "1 day")
+# Días desde el origen de la pandemia
+# A las fechas anteriores le restamos la de origen de la pandemia -> obtendremos una secuencia
+days_since_start = as.numeric(dates - start_date)
+
+# Ya podemos hacer las predicciones
+# Como en los modelos solo hemos usado la columna Dias en las variables independientes, vamos a crear un data.frame donde la columna Dias viene dada por days_since_start
+new_data = data.frame(Dias = days_since_start)
+
+# Predicción 1 es con el modelo 1 lineal
+pred1 = predict(mod1, newdata = new_data)
+# Predicción 2 es con el modelo 2 exponencial
+pred2 = exp(predict(mod2, newdata = new_data))
+# Predicción 3 es con el modelo 3 potencial, también hay un log de la variable independiente
+pred3 = exp(predict(mod3, newdata = new_data))
+# Predicción 4 es con el modelo 2 exponencial
+pred4 = exp(predict(mi_model, newdata = new_data))
+
+# Creamos objeto de tipo xts
+# Hay que rellenar con valores desconocidos, porque las predicciones tiene 100 elementos y los datos reales Casos_Confirmados en spain tenemos 98
+datos_por_fecha_ts = xts(x = data.frame(Real = c(datos_spain$Casos_Confirmados, rep(NA, length(pred1) - length(datos_spain$Casos_Confirmados))),
+                                        Mod_Lin = pred1,
+                                        #Mod_Exp = pred2, # Quitamos el Exp porque nos destroza la gráfica y no vemos nada
+                                        Mod_Pot = pred3,
+                                        Mod_Mixt = pred4),
+                         order.by = dates) # dates es variable calculada antes con la lista de fechas desde inicio hasta fin con saltas de 1 día
+# Creamos el gráfico       
+# Podemos ver que el modelo Mixto el inventado, está muy cerca del Real
+dygraph(datos_por_fecha_ts)
+
+# DUDA de lo anterior
+# En el order.by -> 'dates' son fechas, y 'datos_spain' si tiene la columna Fecha y Dias (número de día desde el inicio). Pero las predicciones se han hecho solo con Dias, y no con fechas.
+# ¿Cómo xts es capaz de "ordenar" los datos por fechas, y relacionar la columna de 'Casos_Confirmados', con las columnas de las predicciones 'Mod_Lin', 'Mod_Exp', etc.?
+# Posible respuesta: realmente se juntan al crear el data.frame, y ahi se está la columna Dias en todos los elementos, y luego order.by solo ordena por las fechas
+# Comprobación, vamos a crear aparte el data.frame, poemos [0:98], para evitar lo de añadir 'NA', y poder tambiñen añadir la columna Fecha
+my_dataframe = data.frame(Real = datos_spain$Casos_Confirmados, 
+                          Mod_Mixt = pred4[0:98], datos_spain$Fecha)
+# Respuesta: data.frame solo junta columnas con el mismo número de filas y xts crea un objato que el nombre de la fila es el indicado en order.by, que solo añade esa columna de tiempo como índice, no trata de agrupar o relacionar los datos, solo los anexa
+# Podriamos poner en order.by cualquier columna con un campo fecha y con el mismo número de filas que el data.frame y xts las uniría
+my_xts_dates = xts(x = my_dataframe, order.by = dates[0:98])
+my_xts_fecha = xts(x = my_dataframe, order.by = datos_spain$Fecha)
+dygraph(my_xts_dates)
+dygraph(my_xts_fecha)
+# Ejemplo, vamos a crear de nuevo la variable dates pero con otro año
+my_start_date = ymd("2021-01-22")
+my_end_date = ymd("2021-05-01") # ponemos un día más porque 2020 fue bisiesto
+my_dates = seq(my_start_date + 1, my_end_date, by = "1 day")
+my_xts_dates = xts(x = my_dataframe, order.by = my_dates[0:98])
+# Se ha creado un objeto igual pero los nombres de filas son fechas de 2021
+dygraph(my_xts_dates)
+```
+
+
+
+

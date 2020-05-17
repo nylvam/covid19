@@ -1,0 +1,225 @@
+---
+title: "Fuentes de Datos"
+author: "Nylvam"
+date: "5/4/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+```
+
+# Puntos previos y enlaces en el fichero del curso...
+
+## Un primer ejemplo: carga de datos desde dos fuentes 
+```{r}
+CCAA_camas_UCI=read_csv("../data/COVID_19_Datadista/COVID19/ccaa_camas_uci_2017.csv")
+
+glimpse(CCAA_camas_UCI)
+
+knitr::kable(CCAA_camas_UCI)
+```
+
+Ahora queremos el porcentaje de camas UCI por población en España y queremos que este añadido sea de producción propia y con datos oficiales en este caso acudiremos al [Instituto Nacional de Estadística de España (INE)](ine.es). 
+
+Desde aquí buscaremos [Población por comunidades y ciudades autónomas y sexo](https://www.ine.es/jaxiT3/Tabla.htm?t=2853).  y nos bajaremos los datos que deseemos ( los  guardamos en DatosINE)
+
+```{r}
+# Usamos read_tsv porque esta separado por tabuladores, y no por comas
+poblacion_CCAA_long=read_tsv("../data/DataINE_España/Poblacion_CCAA_2017_2019_2853.csv")
+glimpse(poblacion_CCAA_long)
+knitr::kable(poblacion_CCAA_long)
+poblacion_CCAA_wider=poblacion_CCAA_long %>% tidyr::pivot_wider(names_from=Periodo, values_from=Total)
+glimpse(poblacion_CCAA_wider)
+
+# Son todo character, hasta el total debido a los puntos de los miles
+str(poblacion_CCAA_long)
+```
+
+### Las funciones `pivot_wider`  y `pivot_long`
+
+Probaremos estas funciones con los fichero de datos de altas
+
+#### El fichero de altas  por fecha y comunidad autónoma 
+Fichero largo `ccaa_covid19_altas_long.csv` es una tabla de   4  columnas 
+
+```{r}
+ccaa_altas_long=read_csv("../data/COVID_19_Datadista/COVID19/ccaa_covid19_altas_long.csv")
+glimpse(ccaa_altas_long)
+knitr::kable(ccaa_altas_long)
+```
+
+Estos datos los podemos transformar en una tabla con la función `pivot_wider`de la librería `tidyr`
+
+```{r}
+aux1=ccaa_altas_long %>% tidyr::pivot_wider(names_from=fecha,values_from=total)
+glimpse(aux1)
+knitr::kable(aux1)
+```
+
+
+### Los datos de casos por día y por  comunidad autónoma
+
+Fichero `ccaa_covid19_casos.csv` es un fichero  que puede ser procesado desde el fichero `ccaa_covid19_casos_long.csv`
+
+```{r}
+ccaa_casos_wider=read_csv("../data/COVID_19_Datadista/COVID19/ccaa_covid19_casos.csv")
+glimpse(ccaa_casos_wider)
+knitr::kable(ccaa_casos_wider)
+```
+
+Podemos recuperar el fichero largo con la función  `pivot_longer`
+
+```{r}
+aux2=ccaa_casos_wider %>% pivot_longer(cols=starts_with("2020"))
+glimpse(aux2)
+knitr::kable(aux2)
+```
+
+
+## Nuestro modelo de datos
+
+Definamos  nuestro modelo de datos Para ello separemos los ficheros de datos en  dos grupos
+
+
+##  Metadatos
+
+Son datos relativos a las unidades en las que se miden las variables. Las unidades pueden ser: continentes, países, regiones. Las regiones reciben distintas denominaciones según la organización de cada país: departamentos, estados, comunidades autónomas, **landers** , provincias, etc.
+
+Algunos de los ficheros correspondientes a metadatos  son :
+
+* `alojamientos_turisticos_boe_2020_4194.csv`
+* `ccaa_camas_uci_2017.csv`
+* `ccaa_covid19_mascarillas.csv`
+* `municipios_distritos_madrid_casos.csv`
+* `nacional_covid19_rango_edad.csv`
+* `puntos_restauracion_comida_para_llevar.csv`
+
+
+## Datos sobre la epidemia
+
+Los datos epidemiológicos son los que e contabilidad datos sobre la pandemia en cada unidad de medida. Como ya hemos explicado están en la versión **wider**  la **long**
+
+* Datos de *casos* de pacientes de coronavirus
+  + `ccaa_covid19_casos.csv`; `ccaa_covid19_casos_long.csv`
+* Datos de *altas* de pacientes de coronavirus
+  + `ccaa_covid19_altas.csv`; `ccaa_covid19_altas_long.csv`
+* Datos de *fallecidos* de pacientes de coronavirus
+  + `ccaa_covid19_fallecidos.csv`; `ccaa_covid19_fallecidos_long.csv`
+* Datos de pacientes *hospitalizados*  de pacientes de coronavirus
+  + `ccaa_covid19_hospitalizados.csv`; `ccaa_covid19_hospitalizados_long.csv`
+* Datos de pacientes en *UCI*  de pacientes de coronavirus
+  + `ccaa_covid19_uci.csv`; `ccaa_covid19_uci_long.csv`
+
+
+## Tabla base de nuestro modelo de datos 
+
+Vamos a construir una tabla  de tipo "long" con todos los datos. Para ello apilaremos las tablas long añadiendo la categoría que mide la variable total: casos, ingresos, fallecimientos, uci.
+
+Empecemos con algunas variables auxiliares
+
+```{r}
+tipos=c("casos","hospitalizados","fallecidos","uci","altas")
+prefijo="../data/COVID_19_Datadista/COVID19/ccaa_covid19_"
+sufijo="_long.csv"
+# Creamos una función para leer los ficheros en función del tipo
+# Se podian pasar las variables definidas como parametros en la llamada, en lugar de dejarlas fijas
+arreglo <- function(tipo, prefijo = "../data/COVID_19_Datadista/COVID19/ccaa_covid19_", sufijo = "_long.csv"){
+  aux = read_csv(paste0(prefijo,tipo,sufijo))
+  # Al data.fram con los datos leidos del fichero, le añadimos una columna con el tipo
+  aux$tipo=tipo
+  return(aux)
+  }
+
+# Con lapply aplicamos a los tipos la función arreglo()
+# Agrupamos por filas con bind_rows los resultados de lapply
+datos_COVID19_long = bind_rows(lapply(tipos,FUN=arreglo))
+datos_COVID19_long
+```
+
+## Añadir metadatos a nuestro modelo de datos
+
+Vamos a añadir las poblaciones de cada Comunidad Autónoma y  su número de camas  de cuidados intensivos (uci).
+
+```{r}
+camas_uci = read_csv("../data/COVID_19_Datadista/COVID19/ccaa_camas_uci_2017.csv")
+camas_uci %>% rename(Públicos_UCI = Públicos, Privados_UCI = Privados, Total_UCI = Total)
+knitr::kable(camas_uci)
+```
+
+Ahora leeremos la población por CCAA. Construimos la tabla a lo ancho, seleccionamos  el año  y eliminamos los totales
+
+```{r}
+# Volvemos a leer el fichero, pero teniendo en cuenta lo de los puntos de miles
+poblacion_CCAA = read_tsv("../data/DataINE_España/Poblacion_CCAA_2017_2019_2853.csv",
+                        locale = locale(grouping_mark = "."))
+poblacion_CCAA = poblacion_CCAA %>% 
+  filter(`Comunidades y Ciudades Autónomas`!="Total", Sexo == "Total", Periodo == 2019) %>%
+  transmute(cod_ine = str_sub(`Comunidades y Ciudades Autónomas`,1,2), 
+            Pob_CCAA_2019 = Total, CCAA=`Comunidades y Ciudades Autónomas`)
+glimpse(poblacion_CCAA)
+knitr::kable(poblacion_CCAA)
+```
+
+### Añadimos los metadatos
+
+Podemos construir una tibble que contega toda la información utilizando funciones tipo "inner_join
+Tibble en R es un concepto parecido al data.frame pero más sencillo y actual, relaciado con tidyverse
+
+```{r}
+metadatos_CCAA = poblacion_CCAA %>% select(-CCAA) %>% # Seleccionamos todas las columnas menos la de CCAA
+  inner_join(camas_uci, by="cod_ine") %>%
+  rename(UCIS_Públicos = Públicos, UCIS_Privados = Privados, UCI_Total = Total)
+
+# En el inner_join no incluimos el parámetro 'by' pero el sistema selecciona la columna de igual nombre
+# Al ejecutarlo la propia consola nos muestras el mensaje: 'Joining, by = "cod_ine"'
+datos_COVID19_con_metadatos_long = datos_COVID19_long %>% 
+  inner_join(metadatos_CCAA %>% select(-CCAA)) # No seleccionamos la columnas CCAA para que no se repita
+```
+
+## Guardamos los datos 
+
+Guardaremos los datos como objetos y como cvs
+
+```{r}
+# Lo guardamos como R Object, que se carga solo con 'load' y ocupa menos
+save(datos_COVID19_long,
+     file = "../data/Modelo_Datos/my_datos_COVID19_long_long.Robj")
+save(metadatos_CCAA,
+     file = "../data/Modelo_Datos/my_metadatos_CCAA.Robj")
+save(datos_COVID19_con_metadatos_long,
+     file = "../data/Modelo_Datos/my_datos_COVID19_con_metadatos_long.Robj")
+  
+  
+write_csv(datos_COVID19_long,
+          path = "../data/Modelo_Datos/my_datos_COVID19_long.csv")
+write_csv(metadatos_CCAA,
+          path = "../data/Modelo_Datos/my_metadatos_CCAA.csv")
+write_csv(datos_COVID19_con_metadatos_long,
+          path = "../data/Modelo_Datos/my_datos_COVID19_con_metadatos_long.csv")
+```
+
+### Uso de los datos
+
+```{r}
+data_long = read_csv("../data/Modelo_Datos/my_datos_COVID19_con_metadatos_long.csv")
+data_long_filtrado = data_long %>% select(fecha, CCAA, total, tipo) 
+
+data_wider_filtrado = data_long_filtrado %>%
+  pivot_wider(names_from = CCAA, values_from = total)
+
+knitr::kable(data_wider_filtrado)
+```
+
+
+```{r}
+# Se quitan 2 variables -> error? en el video lo explica sobre la tabla data_wider_filtrado
+# En realidad se está quitando la segunda fila de data_long_filtrado ¿porqué?
+#ggplot(data_long_filtrado[-2,], aes(x=fecha,y=total,col=CCAA)) + geom_smooth(se = FALSE)
+# aes(x=fecha, y=total, col = CCAA)) -> estética definiendo la x, la y y coloreando por CCAA
+# Por lo visto se puede usar 'col', 'color' ó 'colour'
+ggplot(data_long_filtrado, aes(x=fecha, y=total, col = CCAA)) + geom_smooth(se = FALSE)
+```
+

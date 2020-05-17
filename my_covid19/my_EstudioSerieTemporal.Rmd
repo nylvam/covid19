@@ -1,0 +1,180 @@
+---
+title: "Estudio Serie Temporal"
+author: "Nylvam"
+date: "5/1/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(forecast)
+```
+
+# Estudio Serie Temporal COVID-19 España
+
+## Tabla de datos
+```{r}
+# Cargar datos del fichero
+covid19 = read.csv("covid_19_clean_complete.csv")
+str(covid19)
+covid19$Date = as.Date(as.character(covid19$Date),"%m/%d/%Y")
+str(covid19)
+```
+
+## Estudio para España
+```{r}
+# Extraemos solo los datos para España
+covid19_Spain = covid19[covid19$Country.Region == "Spain", ]
+
+# Calculamos los infectados y recuperados por día
+infectados_por_dia = aggregate(covid19_Spain$Confirmed ~ covid19_Spain$Date, FUN = sum)
+fallecidos_por_dia = aggregate(covid19_Spain$Deaths ~ covid19_Spain$Date, FUN = sum)
+recuperados_por_dia = aggregate(covid19_Spain$Recovered ~ covid19_Spain$Date, FUN = sum)
+
+# Cremos una tabla con toda la información
+tabla_Spain = data.frame(unique(covid19_Spain$Date), infectados_por_dia[,2], fallecidos_por_dia[,2], recuperados_por_dia[,2])
+names(tabla_Spain) = c("Fecha", "Infectados", "Fallecidos", "Recuperados")
+head(tabla_Spain, 10)
+```
+
+## Cálculo de la serie temporal de infectados
+```{r}
+# Utilizamos la función ts = Time Series
+# frecuency = 7 -> estacionalidad por semanas
+# start = c(1,3) -> Semana 1, dia 3 (miércoles), el primer dato es el miercoles 22/01
+infectados = ts(tabla_Spain$Infectados, frequency = 7, start = c(1,3))
+# La salida nos muestras Start = c(1,3), que es lo que hemos indicado, y End = c(15,2), es decir semana 15 dia 2 (martes) -> Start = 22/01/2020 End = 28/04/2020
+infectados
+
+# Gáfico de la serie temporal de los infectados
+forecast::autoplot(infectados)
+```
+
+## Cálculo de los componentes de la serie
+Nuestra serie temporal es estacional con variación semanal
+```{r}
+# Calcularemos sus componentes suponiendo que el modelo es aditivo
+# La función 'decompose' descompone los componentes de la serie
+componentes = decompose(infectados, type = "additive")
+# Podemos observar que los datos se repiten cada 7 valores
+# Si empieza un miércoles, el viernes la serie es donde aumenta más los infectados y los martes es la disminución más acentuada, con un valor negativo
+# viernes = 550.99978 y martes = -577.40682
+componentes$seasonal
+# Lo representamos en un gráfico, de las tre componentes (estacional, tendendia y aleatorio) junto con la serie original
+forecast::autoplot(componentes)
+# Observamos:
+# La tendencia de la serie es creciente
+# Los días con más repunte son jueves, viernes y sábado, y los días con menos son lunes, martes y miércoles
+# La componente aleatoria se mantenien estable hasta la semana 8-9, y a partir de ahí se desestabiliza, lo cual nos bueno para el modelo, porque la componente aleatoria es muy grande
+```
+
+## Ajuste de la serie temporal
+Para ajustar la serie temporal de los infectados, tenemos que eliminar la componente estacional
+```{r}
+# Calculamos la serie ajustada: a la serie original le restamos el componente estacional
+infectados_ajustados = infectados -  componentes$seasonal
+# El gráfico es muy parecido al original, pero le hemos restado la variaciones estacionales por días de la semana
+forecast::autoplot(infectados_ajustados)
+```
+
+## Predicciones usando el suavizado exponencial
+Para hacer predicciones, hemos de usar la serie ajustada ya que los modelos de predicción suponen que la serie temporal no tiene componente estacional
+```{r}
+# Podemos usar el suavizado de Holt-Winters (gamma = FALSE -> doble suavizado, no un triple)
+prediccion_infectados = HoltWinters(infectados_ajustados, gamma = FALSE)
+# El suavizado exponencial simple no funciona bien cuando hay una tendencia en la serie temporal como es nuestro caso
+
+# Podemos ver la estimaciñon del coeficiente 'alpha' y el coeficiente 'beta'
+prediccion_infectados
+# Observamos:
+# El valor de 'alpha' es alto, lo que nos dice que las predicciones usan el nivel actual de la serie de infectados con un peso elevado, es decir, para predecir el valor de un día en particular, usa el valor de los infectados del día actual con un peso de 0,7845437 (78%)
+# El valor de 'beta' es 0,7013439, tenemos que la pendiente de la tendencia de la predicción en un dia en particular vale 0,7013439
+# Revisar video de introducción para interpretar estos parámetros
+
+# El error comentido lo podemos ver usando la componente SSE (sum of squared errors)
+# Suma de los cuadrados de las diferencias entre los valores de la serie original ajustada y la serie ajustada (predicha, predicted)
+# SSE = 121868123
+prediccion_infectados$SSE
+# Hacemos la raiz cuadrada para tener las unidades de la serie original
+# Nos equivovamos en 1.1039,39 infectados
+sqrt(prediccion_infectados$SSE)
+
+# Dibujamos el gráfico de la serie original ajustada y predicha con el suavizado doble de Holt-Winters
+# La serie roja es la predicha y la negra es la original
+# Ambas se superponen y por lo tanto la predicción usando este modelo es bastante buena
+plot(prediccion_infectados)
+```
+
+## Predicciones más alla del último día
+```{r}
+# Para hacer predicciones más alla de nuestra tabla de datos, hemos de usar la función 'forecast.HoltWinters' de la libreria 'forecast' donde el parámetro 'h' indica hasta dónde queremos realizar la predicción
+# En este caso a una semana vista 'h = 7'
+prediccion_infectados_semana = forecast:::forecast.HoltWinters(prediccion_infectados, h = 7)
+# La anterior llamada necesita tres ':' 
+#prediccion_infectados_semana2 = forecast::forecast(prediccion_infectados, h = 7)
+
+# Podemos ver las prediciones para los próximos 7 días
+prediccion_infectados_semana
+# Observamos:
+# El índice (nomre de las filas) es el tiempo en semanas 15.28571, son días en unidades de semana. El 16.00000 será semana 16, mientras que el día anterior sería 15.85714 (trozos de 1/7)
+# La primera columna son las predicicones 'Point Forecast' para estos siete días
+# Las dos siguientes columnas sería el intervalo de confianza de las predicciones al 80%
+# Las dos últimas el intervalo de confianza de las predicciones al 95%
+
+# Hacemos un gráfico la de predicción
+forecast::autoplot(prediccion_infectados_semana)
+# Tendriamos los infectados de nuestros datos, y al final de la línea, otra linea de los valores predichos con dos bandas de color, una es el intervalo de confianza al 80% y otra al 95% (más ancha, azul más suave)
+```
+
+## Comprobación del modelo
+Verificar si el modelo que hemos usado es correcto para nuestra serie temporal
+```{r}
+# Usamos el test de 'Ljung-Box' para ver si las autocorrelaciones de los errores de la predicción de nuestra serie son diferentes de cero o no. Para que el modelo sea válido, deben ser cero.
+
+# Tenemos que ver que las autocorrelaciones de los residuos en la serie predicha deben ser no significativas
+
+# Para ver autocorrelaciones en los errores hacemos un gráfico de correlograma
+ggAcf(prediccion_infectados_semana$residuals[3:98], lag.max = 7)
+
+# Hemos especificado un 'lag' máximo de 7 días. 
+# Caso del video: revisar el nuestro. Parece que las autocorrelaciones de los errores para 6 días se pueden considerar diferentes a cero
+# Hacemos el test de 'Ljung-Box'
+Box.test(prediccion_infectados_semana$residuals, lag = 7, type = "Ljung-Box")
+# X-squared = 3,3325 df = 7 p-value = 0,8526
+
+# Comprobamos la normalidad de los residuos con el test de 'Shapiro-Wilks'
+# Para ver si los residuos de las serie de los infectados predicha siguen una distribución normal o no 
+shapiro.test(prediccion_infectados_semana$residuals)
+# W = 0,89075 p-value = 8.218e-07
+# Vemos que no sigue porque nos da un p-value muy pequeño
+# Por lo tanto el test nos dice que la serie de los residuos no es normal, y por lo tanto el modelo no sería adecuado
+```
+
+# Serie temporal de los fallecidos
+```{r}
+fallecidos = ts(tabla_Spain$Fallecidos, frequency = 7, start = c(1,3))
+fallecidos
+autoplot(fallecidos)
+# Cálculo de los componentes de la serie
+componentes = decompose(fallecidos, type = "additive")
+componentes$seasonal
+forecast::autoplot(componentes)
+# Ajuste de la serie temporal
+fallecidos_ajustados = fallecidos -  componentes$seasonal
+forecast::autoplot(fallecidos_ajustados)
+# Predicciones usando el suavizado exponencial
+prediccion_fallecidos = HoltWinters(fallecidos_ajustados, gamma = FALSE)
+prediccion_fallecidos
+prediccion_fallecidos$SSE
+sqrt(prediccion_fallecidos$SSE)
+plot(prediccion_fallecidos)
+# Predicciones más alla del último día
+prediccion_fallecidos_semana = forecast:::forecast.HoltWinters(prediccion_fallecidos, h = 7)
+prediccion_fallecidos_semana
+forecast::autoplot(prediccion_fallecidos_semana)
+# Comprobación del modelo
+ggAcf(prediccion_fallecidos_semana$residuals[3:98], lag.max = 7)
+Box.test(prediccion_fallecidos_semana$residuals, lag = 7, type = "Ljung-Box")
+shapiro.test(prediccion_fallecidos_semana$residuals)
+```
+

@@ -1,0 +1,143 @@
+---
+title: "my_EstudioSIR"
+author: "Nylvam"
+date: "4/30/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(wbstats)
+```
+
+# Estudio SIR 
+
+Si quieres mirar modelos más complejos, echa un vistazo a
+https://en.wikipedia.org/wiki/Compartmental_models_in_epidemiology
+
+## Tabla de datos
+```{r}
+# Cargamos tabla de datos (origen Kaggle)
+covid19 = read.csv("covid_19_clean_complete.csv")
+str(covid19)
+
+# Necesario para convertir la fecha en tipo 'Date', dado que se importa como 'chr'
+covid19$Date = as.Date(as.character(covid19$Date),"%m/%d/%Y")
+str(covid19)
+```
+
+## Filtro de 75 dias para igualar los datos del video del curso
+```{r}
+# En un momento del video, se habla que la tabla tiene 75 filas correspondientes a 75 dias
+#fecha_fin = as.Date("22/01/20","%d/%m/%Y") + 74
+#covid19 = covid19[covid19$Date <= fecha_fin, ]
+```
+
+## Habitantes por país
+```{r}
+# Necesitamos el valor de 'N' que es la población por país
+# Con esta función obtenemos la población de la mayoría de países del mundo
+pop_data <- wbstats::wb(indicator = "SP.POP.TOTL", startdate = 2018, enddate = 2019)
+
+# Algunos ejemplos, en la columna 'value' tendremos los habitantes
+pop_data[pop_data$country == "Spain", ]
+pop_data[pop_data$country == "Italy", ]
+pop_data[pop_data$country == "France", ]
+pop_data[pop_data$country == "United States", ]
+```
+
+## Estudio para España
+
+### Preparamos los datos de España
+```{r}
+# Creamos un data.frame con los datos filtrados solo para España
+covid19_Spain = covid19[covid19$Country.Region == "Spain", ]
+
+# Calculamos los infectados y los recuperados por días
+infectados_por_dia = aggregate(covid19_Spain$Confirmed ~ covid19_Spain$Date, FUN = sum)
+fallecidos_por_dia = aggregate(covid19_Spain$Deaths ~ covid19_Spain$Date, FUN = sum)
+# El modelo SIR, es uno de los más simples, y no tiene en cuenta a los fallecidos, y por lo tanto vamos a considerarlos como infectados, y se los sumamos
+infectados_por_dia2 = infectados_por_dia[,2] + fallecidos_por_dia[,2]
+recuperados_por_dia = aggregate(covid19_Spain$Recovered ~covid19_Spain$Date, FUN = sum)
+
+# Los susceptibles S(t) se calculan como S(t) = N - I(t) - R(t)
+# Es decir los susceptibles de ser contagiados, serán los total de la población del paía, aquellos que todavia no se han infectado (infectados + fallecidos) ni se han recuperado
+habitantes = pop_data$value[pop_data$country == "Spain"]
+# Son vectores, menos recuperados_por_dia, y por lo tanto cogemos solo la segunda columna
+susceptibles_por_dia = habitantes - infectados_por_dia2 - recuperados_por_dia[,2]
+
+# Creamos un data.frame con toda la información
+# A la fecha le aplicamos unique() porque antes hicimos aggregate con FUN=sum y si hubiera fechas repetidas se habrian sumado
+tabla_Spain = data.frame(unique(covid19_Spain$Date), susceptibles_por_dia,
+                         infectados_por_dia2, recuperados_por_dia[,2])
+# Cambiamos nombres de columna para facilitar 
+names(tabla_Spain) = c("Fecha", "Susceptibles", "Infectados", "Recuperados")
+
+head(tabla_Spain)
+```
+
+### Calculamos R0 para los datos que tenemos para España
+Vamos a estimar el valor R0 para España, calculando la pendiente (cambiada de signo) de la recta de regresión de la variable Y = N * ln(S(t)) en función de los recuperados X = R(t) 
+```{r}
+x = tabla_Spain$Recuperados
+y = habitantes * log(tabla_Spain$Susceptibles)
+regresion = lm(y~x)
+summary(regresion)
+# El valor de R0 sería (x) 3,54 y R2 = 0,9691 y por lo tanto es una regresión muy buena
+# Cogemos el valor de R0 del segundo coeficiente cambiado de signo
+estimacion_R0 = -regresion$coefficients[2]
+```
+
+### Determinar si la epidemia se expandirá
+Para ver si la epidemia se expandirá o no, hemos de comparar el valor anterior R0 con e^(R0*R(t)/N)
+```{r}
+# Calculamos el último día de que tenemos de los datos
+dia_ultimo = length(tabla_Spain[,1])
+dia_ultimo
+# Aplicamos la formula teniendo en consideración que R(t), son los Recuperados del día más reciente que tenemos 'dia_ultimo'
+formula = exp(estimacion_R0*tabla_Spain$Recuperados[dia_ultimo]/habitantes)
+formula
+# El valor es de 1,00942
+# Conclusión: El valor de R0=3,54 supera con creces el valor de la formula=1,00942 y por lo tanto hasta la fecha el Covid-19 se expandirá
+if (estimacion_R0 > formula) {
+  "Se expandirá"
+}  else {
+  "No se expandirá"
+}
+```
+
+## Estudio para China
+Vamos a realizar el mismo estudio pero para China
+```{r}
+# Preparamos los datos de China
+covid19_China = covid19[covid19$Country.Region == "China",]
+infectados_por_dia = aggregate(covid19_China$Confirmed ~ covid19_China$Date, FUN = sum)
+fallecidos_por_dia = aggregate(covid19_China$Deaths ~ covid19_China$Date, FUN = sum)
+infectados_por_dia2 = infectados_por_dia[,2] + fallecidos_por_dia[,2]
+recuperados_por_dia = aggregate(covid19_China$Recovered ~ covid19_China$Date, FUN = sum)
+habitantes = pop_data$value[pop_data$country == "China"]
+susceptibles_por_dia = habitantes - infectados_por_dia2 - recuperados_por_dia[,2]
+tabla_China = data.frame(unique(covid19_China$Date), susceptibles_por_dia,
+                         infectados_por_dia2, recuperados_por_dia[,2])
+names(tabla_China) = c("Fecha", "Susceptibles", "Infectados", "Recuperados")
+head(tabla_China)
+
+# Calculamos R0 para los datos que tenemos para China
+x = tabla_China$Recuperados
+y = habitantes * log(tabla_China$Susceptibles)
+regresion = lm(y~x)
+summary(regresion)
+estimacion_R0 = -regresion$coefficients[2]
+
+# Determinar si la epidemia se expandirá
+dia_ultimo = length(tabla_China[,1])
+dia_ultimo
+formula = exp(estimacion_R0*tabla_China$Recuperados[dia_ultimo]/habitantes)
+formula
+if (estimacion_R0 > formula) {
+  "Se expandirá"
+}  else {
+  "No se expandirá"
+}
+```
+
